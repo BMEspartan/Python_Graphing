@@ -1,0 +1,66 @@
+"""
+bar_error_bars.py
+
+Demonstrates:
+- Bar chart of group means
+- Error bars (std dev)
+- Value labels on each bar
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+def simulate_group_data(n_groups: int = 4, n_samples: int = 50):
+    """Simulate data for several groups."""
+    rng = np.random.default_rng(seed=123)
+    means = np.linspace(10, 25, n_groups)
+    data = [
+        rng.normal(loc=mu, scale=2.5, size=n_samples)
+        for mu in means
+    ]
+    return data
+
+
+def plot_bar_with_errors(group_data, group_labels):
+    means = [np.mean(g) for g in group_data]
+    stds = [np.std(g, ddof=1) for g in group_data]
+
+    x = np.arange(len(group_labels))
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    bars = ax.bar(x, means, yerr=stds, capsize=8)
+
+    ax.set_title("Group Comparison with Error Bars")
+    ax.set_ylabel("Score")
+    ax.set_xticks(x)
+    ax.set_xticklabels(group_labels)
+
+    ax.grid(axis="y", linestyle="--", linewidth=0.5, alpha=0.7)
+
+    # Add value labels on top of bars
+    for bar, mean in zip(bars, means):
+        height = bar.get_height()
+        ax.annotate(
+            f"{mean:.1f}",
+            xy=(bar.get_x() + bar.get_width() / 2, height),
+            xytext=(0, 3),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+        )
+
+    plt.tight_layout()
+    plt.savefig("bar_error_bars.png", dpi=300)
+    plt.show()
+
+
+def main():
+    group_labels = ["Control", "Treatment A", "Treatment B", "Treatment C"]
+    data = simulate_group_data(n_groups=len(group_labels))
+    plot_bar_with_errors(data, group_labels)
+
+
+if __name__ == "__main__":
+    main()
