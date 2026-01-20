@@ -1,0 +1,73 @@
+"""
+multi_panel_dashboard.py
+
+Demonstrates a small "dashboard" of plots in a 2x2 grid:
+- Histogram
+- Approximate KDE (smoothed histogram)
+- Boxplot
+- Scatter plot of two variables
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.stats import gaussian_kde
+
+
+def generate_data(n_points: int = 300):
+    rng = np.random.default_rng(seed=7)
+
+    # One main variable: mixture of two normals
+    x = np.concatenate([
+        rng.normal(loc=0, scale=1, size=n_points // 2),
+        rng.normal(loc=3, scale=0.8, size=n_points // 2),
+    ])
+
+    # A second variable related to x but with noise
+    y = 1.5 * x + rng.normal(scale=1.0, size=n_points)
+
+    return x, y
+
+
+def main():
+    x, y = generate_data()
+
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+    ax_hist, ax_kde, ax_box, ax_scatter = axes.ravel()
+
+    # 1. Histogram
+    ax_hist.hist(x, bins=20, edgecolor="black", alpha=0.7)
+    ax_hist.set_title("Histogram of X")
+    ax_hist.set_xlabel("X")
+    ax_hist.set_ylabel("Frequency")
+
+    # 2. KDE (approximate density of X)
+    kde = gaussian_kde(x)
+    x_grid = np.linspace(min(x) - 1, max(x) + 1, 200)
+    ax_kde.plot(x_grid, kde(x_grid))
+    ax_kde.set_title("KDE of X")
+    ax_kde.set_xlabel("X")
+    ax_kde.set_ylabel("Density")
+    ax_kde.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+
+    # 3. Boxplot
+    ax_box.boxplot(x, vert=True, patch_artist=True)
+    ax_box.set_title("Boxplot of X")
+    ax_box.set_ylabel("X")
+
+    # 4. Scatter X vs Y
+    ax_scatter.scatter(x, y, alpha=0.7)
+    ax_scatter.set_title("Scatter: Y vs X")
+    ax_scatter.set_xlabel("X")
+    ax_scatter.set_ylabel("Y")
+    ax_scatter.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+
+    # Overall figure title
+    fig.suptitle("Multi-Panel Visualization Dashboard", fontsize=14)
+
+    plt.tight_layout(rect=(0, 0, 1, 0.96))
+    plt.savefig("multi_panel_dashboard.png", dpi=300)
+    plt.show()
+
+
+if __name__ == "__main__":
+    main()
