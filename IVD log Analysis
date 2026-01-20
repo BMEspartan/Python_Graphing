@@ -1,0 +1,330 @@
+"""
+ivd_log_analysis.py
+
+Example script for reviewing IVD instrument test logs.
+
+This script is designed to look like a realistic tool you might use
+as a Lab Technician to:
+- Load test logs from a CSV file
+- Compute basic statistics and control limits
+- Flag out-of-control points
+- Visualize trends over time
+- Summarize pass/fail performance per instrument
+
+Expected CSV format (one row per test):
+    timestamp, instrument_id, test_id, measurement, status
+Where:
+    - timestamp: ISO 8601 string (e.g., "2026-01-19T10:15:00")
+    - instrument_id: string (e.g., "IVD-001")
+    - test_id: string / integer ID
+    - measurement: float (e.g., assay signal, pressure, temperature)
+    - status: "PASS" or "FAIL"
+
+Usage examples:
+    # Generate a synthetic log and analyze it
+    python ivd_log_analysis.py --generate-sample sample_log.csv
+
+    # Analyze an existing log
+    python ivd_log_analysis.py --csv path/to/your_log.csv
+
+Dependencies:
+    pip install numpy pandas matplotlib
+"""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Tuple
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+
+@dataclass
+class ControlLimits:
+    mean: float
+    std: float
+    lcl: float  # lower control limit
+    ucl: float  # upper control limit
+
+
+def generate_synthetic_log(
+    path: Path,
+    n_rows: int = 600,
+    n_instruments: int = 3,
+    seed: int = 42,
+) -> None:
+    """
+    Generate a synthetic IVD instrument log and save as CSV.
+
+    One instrument will show a slight upward drift over time to mimic
+    a potential calibration issue.
+    """
+    rng = np.random.default_rng(seed)
+
+    # Generate timestamps (1-minute spacing)
+    start = pd.Timestamp("2026-01-01T08:00:00")
+    timestamps = [start + pd.Timedelta(minutes=i) for i in range(n_rows)]
+
+    instrument_ids = [f"IVD-{i+1:03d}" for i in range(n_instruments)]
+    instruments = rng.choice(instrument_ids, size=n_rows)
+
+    # Base measurement values
+    base_mean = 100.0
+    base_std = 2.0
+
+    measurements = []
+    for idx, inst in enumerate(instruments):
+        t_index = idx / n_rows
+
+        # Instrument-specific offset
+        inst_idx = instrument_ids.index(inst)
+        offset = inst_idx * 0.5  # small shift per instrument
+
+        # Add drift for the last instrument
+        drift = 0.0
+        if inst_idx == n_instruments - 1:
+            drift = 5.0 * t_index  # slow drift up to +5 units
+
+        value = rng.normal(loc=base_mean + offset + drift, scale=base_std)
+        measurements.append(value)
+
+    measurements = np.array(measurements)
+
+    # Define status based on simple spec limits
+    lower_spec = base_mean - 6
+    upper_spec = base_mean + 6
+    status = np.where(
+        (measurements >= lower_spec) & (measurements <= upper_spec),
+        "PASS",
+        "FAIL",
+    )
+
+    # Make a simple test_id column
+    test_ids = np.arange(1, n_rows + 1)
+
+    df = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "instrument_id": instruments,
+            "test_id": test_ids,
+            "measurement": measurements,
+            "status": status,
+        }
+    )
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(path, index=False)
+    print(f"[INFO] Synthetic log written to {path.resolve()}")
+
+
+def load_log(path: Path) -> pd.DataFrame:
+    """Load the instrument log from CSV."""
+    if not path.is_file():
+        raise FileNotFoundError(f"CSV file not found: {path}")
+
+    df = pd.read_csv(path, parse_dates=["timestamp"])
+    required_cols = {"timestamp", "instrument_id", "test_id", "measurement", "status"}
+    missing = required_cols - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing required columns in CSV: {missing}")
+
+    return df
+
+
+def compute_control_limits(df: pd.DataFrame, status: str = "PASS") -> ControlLimits:
+    """
+    Compute control limits (mean ± 3σ) using only rows with the given status,
+    typically "PASS" to represent in-control data.
+    """
+    mask = df["status"] == status
+    baseline = df.loc[mask, "measurement"]
+
+    mean = baseline.mean()
+    std = baseline.std(ddof=1)
+    lcl = mean - 3 * std
+    ucl = mean + 3 * std
+
+    return ControlLimits(mean=mean, std=std, lcl=lcl, ucl=ucl)
+
+
+def flag_out_of_control(df: pd.DataFrame, limits: ControlLimits) -> pd.Series:
+    """
+    Flag measurements outside of control limits.
+    Returns a boolean Series indexed like df.
+    """
+    meas = df["measurement"]
+    return (meas < limits.lcl) | (meas > limits.ucl)
+
+
+def summarize_by_instrument(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Summarize PASS/FAIL counts and pass rates per instrument.
+    """
+    grouped = df.groupby(["instrument_id", "status"])["test_id"].count().unstack(fill_value=0)
+    grouped["total"] = grouped.sum(axis=1)
+    grouped["pass_rate"] = grouped.get("PASS", 0) / grouped["total"]
+    return grouped.reset_index()
+
+
+def plot_trends_and_summary(
+    df: pd.DataFrame,
+    limits: ControlLimits,
+    out_of_control: pd.Series,
+    output_path: Path,
+) -> None:
+    """
+    Create a figure with:
+    - Measurement over time (with control limits + out-of-control markers)
+    - Histogram of measurements
+    - Pass rate per instrument
+    """
+    fig, axes = plt.subplots(3, 1, figsize=(10, 12))
+    ax_time, ax_hist, ax_pass = axes
+
+    # Sort by time
+    df_sorted = df.sort_values("timestamp").reset_index(drop=True)
+    time = df_sorted["timestamp"]
+    meas = df_sorted["measurement"]
+    inst = df_sorted["instrument_id"]
+    ooc_sorted = out_of_control.loc[df_sorted.index]
+
+    # 1. Time-series plot
+    unique_instruments = inst.unique()
+    for instrument_id in unique_instruments:
+        mask = inst == instrument_id
+        ax_time.plot(
+            time[mask],
+            meas[mask],
+            marker="o",
+            markersize=3,
+            linestyle="-",
+            label=instrument_id,
+            alpha=0.7,
+        )
+
+    # Control limits and mean
+    ax_time.axhline(limits.mean, linestyle="--", linewidth=1, label="Mean")
+    ax_time.axhline(limits.lcl, linestyle=":", linewidth=1, label="LCL (mean - 3σ)")
+    ax_time.axhline(limits.ucl, linestyle=":", linewidth=1, label="UCL (mean + 3σ)")
+
+    # Out-of-control points
+    ax_time.scatter(
+        time[ooc_sorted],
+        meas[ooc_sorted],
+        marker="x",
+        s=50,
+        label="Out of control",
+        zorder=3,
+    )
+
+    ax_time.set_title("Measurement Over Time by Instrument")
+    ax_time.set_ylabel("Measurement")
+    ax_time.legend(loc="upper left", ncol=2)
+    ax_time.grid(linestyle="--", linewidth=0.5, alpha=0.7)
+
+    # 2. Histogram
+    ax_hist.hist(meas, bins=30, edgecolor="black", alpha=0.7)
+    ax_hist.axvline(limits.mean, linestyle="--", linewidth=1, label="Mean")
+    ax_hist.axvline(limits.lcl, linestyle=":", linewidth=1, label="LCL / UCL")
+    ax_hist.axvline(limits.ucl, linestyle=":", linewidth=1)
+    ax_hist.set_title("Distribution of Measurements")
+    ax_hist.set_xlabel("Measurement")
+    ax_hist.set_ylabel("Count")
+    ax_hist.legend()
+    ax_hist.grid(linestyle="--", linewidth=0.5, alpha=0.7)
+
+    # 3. Pass rate per instrument
+    summary = summarize_by_instrument(df)
+    x = np.arange(len(summary))
+    pass_rates = summary["pass_rate"]
+
+    bars = ax_pass.bar(x, pass_rates)
+    ax_pass.set_title("Pass Rate by Instrument")
+    ax_pass.set_xlabel("Instrument")
+    ax_pass.set_ylabel("Pass Rate")
+    ax_pass.set_ylim(0, 1.05)
+    ax_pass.set_xticks(x)
+    ax_pass.set_xticklabels(summary["instrument_id"])
+
+    # Add value labels on bars
+    for bar, rate in zip(bars, pass_rates):
+        height = bar.get_height()
+        ax_pass.annotate(
+            f"{rate:.1%}",
+            xy=(bar.get_x() + bar.get_width() / 2, height),
+            xytext=(0, 3),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+        )
+
+    ax_pass.grid(axis="y", linestyle="--", linewidth=0.5, alpha=0.7)
+
+    fig.suptitle("IVD Instrument Log Review and Trend Analysis", fontsize=14)
+    plt.tight_layout(rect=(0, 0, 1, 0.96))
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=300)
+    print(f"[INFO] Figure saved to {output_path.resolve()}")
+
+    plt.show()
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Analyze IVD instrument logs and visualize trends."
+    )
+    parser.add_argument(
+        "--csv",
+        type=str,
+        help="Path to the CSV log file to analyze.",
+    )
+    parser.add_argument(
+        "--generate-sample",
+        type=str,
+        help="Optional: Path to create a synthetic example log CSV.",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+
+    if args.generate_sample:
+        sample_path = Path(args.generate_sample)
+        generate_synthetic_log(sample_path)
+
+        # If no explicit --csv, analyze the sample we just created
+        if args.csv is None:
+            args.csv = str(sample_path)
+
+    if not args.csv:
+        raise SystemExit(
+            "No CSV file provided. Use --csv path/to/log.csv "
+            "or --generate-sample sample_log.csv"
+        )
+
+    csv_path = Path(args.csv)
+    df = load_log(csv_path)
+
+    print(f"[INFO] Loaded {len(df)} rows from {csv_path.resolve()}")
+    limits = compute_control_limits(df, status="PASS")
+    out_of_control = flag_out_of_control(df, limits)
+
+    print(
+        f"[INFO] Control limits based on PASS data:\n"
+        f"       Mean = {limits.mean:.3f}, Std = {limits.std:.3f}\n"
+        f"       LCL  = {limits.lcl:.3f}, UCL = {limits.ucl:.3f}"
+    )
+    print(f"[INFO] Out-of-control points: {out_of_control.sum()}")
+
+    output_fig = csv_path.with_suffix("_analysis.png")
+    plot_trends_and_summary(df, limits, out_of_control, output_fig)
+
+
+if __name__ == "__main__":
+    main()
