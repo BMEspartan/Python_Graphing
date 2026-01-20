@@ -1,0 +1,74 @@
+"""
+scatter_regression.py
+
+Demonstrates:
+- Generating synthetic linear data with noise
+- Fitting a linear regression line using numpy.polyfit
+- Computing R^2
+- Plotting data, fit, and residuals
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+def generate_linear_data(n_points: int = 100, slope: float = 2.5,
+                         intercept: float = -1.0, noise_scale: float = 3.0):
+    """Generate synthetic linear data with Gaussian noise."""
+    rng = np.random.default_rng(seed=42)
+    x = np.linspace(0, 20, n_points)
+    noise = rng.normal(scale=noise_scale, size=n_points)
+    y = slope * x + intercept + noise
+    return x, y
+
+
+def compute_r2(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """Compute coefficient of determination (R^2)."""
+    ss_res = np.sum((y_true - y_pred) ** 2)
+    ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
+    return 1 - ss_res / ss_tot
+
+
+def main():
+    # 1. Generate data
+    x, y = generate_linear_data()
+
+    # 2. Fit linear regression y = m*x + b
+    coeffs = np.polyfit(x, y, deg=1)
+    m, b = coeffs
+    y_pred = m * x + b
+    r2 = compute_r2(y, y_pred)
+
+    # 3. Plot scatter and regression line
+    fig, (ax_main, ax_resid) = plt.subplots(
+        2, 1, figsize=(8, 8), sharex=True,
+        gridspec_kw={"height_ratios": [3, 1]}
+    )
+
+    # Main plot
+    ax_main.scatter(x, y, label="Data", alpha=0.7)
+    ax_main.plot(x, y_pred, label=f"Fit: y = {m:.2f}x + {b:.2f}", linewidth=2)
+
+    ax_main.set_title("Linear Regression Example")
+    ax_main.set_ylabel("y")
+    ax_main.legend()
+    ax_main.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+
+    # Residual plot
+    residuals = y - y_pred
+    ax_resid.scatter(x, residuals, alpha=0.7)
+    ax_resid.axhline(0, linestyle="--", linewidth=1)
+    ax_resid.set_xlabel("x")
+    ax_resid.set_ylabel("Residuals")
+    ax_resid.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+
+    # Annotate R^2 on the figure
+    fig.text(0.15, 0.92, f"$R^2 = {r2:.3f}$", fontsize=11)
+
+    plt.tight_layout()
+    plt.savefig("scatter_regression.png", dpi=300)
+    plt.show()
+
+
+if __name__ == "__main__":
+    main()
